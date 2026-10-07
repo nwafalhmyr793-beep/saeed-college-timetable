@@ -1,0 +1,1 @@
+ALTER TABLE `members` ADD `can_edit` integer DEFAULT 0 NOT NULL;
