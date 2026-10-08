@@ -11,7 +11,6 @@ import { applyWorkbookImport } from '../../../lib/workbook-import';
 import {instructorCatalog,displayInstructors} from '../../../lib/teaching';
 import {cancellationSelection,validDate as isValidSelectionDate} from '../../../lib/cancellation-selection';
 function db(){ return env.DB as D1Database; }
-const OWNER_USER_ID = 'f19a42cd-fc65-4b12-bc55-03ec896699c9';
 const validDate=(value:unknown)=>{
   if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))return false;
   const day=new Date(`${value}T12:00:00Z`);

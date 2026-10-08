@@ -1,4 +1,4 @@
-// Optional standalone launcher. Original application source remains unchanged.
+// Build, run and deploy the application on your own Cloudflare account.
 import { readFileSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +8,7 @@ process.chdir(root);
 const [command,...args]=process.argv.slice(2);
 const node=process.execPath;
 function run(script,argv=[],options={}) {
- const r=spawnSync(node,script.endsWith('wrangler.js')?['--import','./scripts/sites-env.mjs',script,...argv]:[script,...argv],{cwd:root,stdio:'inherit',...options});
+ const r=spawnSync(node,script.endsWith('wrangler.js')?['--import','./scripts/runtime-env.mjs',script,...argv]:[script,...argv],{cwd:root,stdio:'inherit',...options});
  if(r.error)throw r.error;
  if(r.status!==0)process.exit(r.status??1);
 }
@@ -28,9 +28,7 @@ function writeConfig(){
 }
 if(command==='build'){
  run('./scripts/run-framework.mjs',['build']);
- // Sites verifies identity headers; standalone HTTP has no such trusted proxy.
- // Strip these headers before forwarding to the original application.
- writeFileSync('dist/server/standalone.js',`import app from './index.js';\nexport default {fetch(request,env,ctx){const headers=new Headers(request.headers);for(const name of [...headers.keys()])if(name.startsWith('oai-authenticated-user-'))headers.delete(name);return app.fetch(new Request(request,{headers}),env,ctx);}};\n`);
+ writeFileSync('dist/server/standalone.js',`export {default} from './index.js';\n`);
  writeConfig();
  console.log('Standalone build ready.');
 }else if(command==='configure'){
@@ -45,7 +43,8 @@ if(command==='build'){
  const target=args[0];if(!['--local','--remote'].includes(target))throw Error('Choose --local or --remote explicitly.');configRequired();if(target==='--remote')remoteRequired();
  run(cli,['d1','migrations','apply','DB',target,...cfgArgs,...(target==='--local'?['--persist-to','.wrangler/standalone']:[])]);
 }else if(command==='start'){
- configRequired();run(cli,['dev',...cfgArgs,'--local','--persist-to','.wrangler/standalone','--ip','127.0.0.1','--port','8787','--inspector-port','0',...args]);
+ const provided=(name)=>args.some(arg=>arg===name||arg.startsWith(name+'='));
+ configRequired();run(cli,['dev',...cfgArgs,'--local','--persist-to','.wrangler/standalone',...(!provided('--ip')?['--ip','127.0.0.1']:[]),...(!provided('--port')?['--port','8787']:[]),...(!provided('--inspector-port')?['--inspector-port','0']:[]),...args]);
 }else if(command==='secret'){
  remoteRequired();const content=readFileSync('.dev.vars','utf8');const match=content.match(/^OWNER_PASSWORD_HASH="([0-9a-f]{32}:[0-9a-f]{64})"$/m);if(!match)throw Error('Generate .dev.vars with the owner command first.');
  run(cli,['secret','put','OWNER_PASSWORD_HASH',...cfgArgs],{stdio:['pipe','inherit','inherit'],input:match[1]+'\n'});
