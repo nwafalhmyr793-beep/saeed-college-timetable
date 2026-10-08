@@ -23,4 +23,4 @@ export async function account(){
  return null;
 
 }
-export const scope=(a:Account,e:{id?:string;department:string;level:number})=>a.role==='admin'||(a.role==='teacher'?!!e.id&&!!a.assignedEntryIds?.includes(e.id):(a.department===e.department&&a.level===Number(e.level)));
+export const scope=(a:Pick<Account,'role'|'department'|'level'|'assignedEntryIds'>,e:{id?:string;department:string;level:number})=>a.role==='admin'||(a.role==='teacher'?!!e.id&&!!a.assignedEntryIds?.includes(e.id):(a.department===e.department&&a.level===Number(e.level)));

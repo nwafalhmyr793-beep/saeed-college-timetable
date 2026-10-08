@@ -20,7 +20,7 @@ function remoteRequired(){configRequired();const c=JSON.parse(readFileSync(confi
 async function password(){
  if(!process.stdin.isTTY){let data='';for await(const c of process.stdin)data+=c;return data.replace(/\r?\n$/,'');}
  process.stderr.write('New owner password (hidden): ');process.stdin.setRawMode(true);process.stdin.resume();process.stdin.setEncoding('utf8');
- return await new Promise((resolve,reject)=>{let value='';const onData=s=>{for(const c of s){if(c==='\u0003'){process.stdin.setRawMode(false);process.exit(130);}if(c==='\r'||c==='\n'){process.stdin.off('data',onData);process.stdin.setRawMode(false);process.stdin.pause();process.stderr.write('\n');resolve(value);return;}if(c==='\u007f'||c==='\b')value=value.slice(0,-1);else if(c>=' ')value+=c;}};process.stdin.on('data',onData);});
+ return await new Promise((resolve)=>{let value='';const onData=s=>{for(const c of s){if(c==='\u0003'){process.stdin.setRawMode(false);process.exit(130);}if(c==='\r'||c==='\n'){process.stdin.off('data',onData);process.stdin.setRawMode(false);process.stdin.pause();process.stderr.write('\n');resolve(value);return;}if(c==='\u007f'||c==='\b')value=value.slice(0,-1);else if(c>=' ')value+=c;}};process.stdin.on('data',onData);});
 }
 function writeConfig(){
  const settings=JSON.parse(readFileSync('standalone.config.json','utf8'));

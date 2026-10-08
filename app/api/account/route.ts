@@ -1,3 +1,4 @@
+import {readJsonObject,InvalidRequestError,validText} from '../../../lib/validation';
 import { NextRequest,NextResponse } from 'next/server';
 import { account,bootstrap,db,hash,verify,digest,type Account } from '../../../lib/accounts';
 import {isOwner,instructorCatalog} from '../../../lib/teaching';
@@ -5,8 +6,9 @@ import {allEntries} from '../schedule/route';
 const fail=(error:string,status=400)=>NextResponse.json({error},{status});
 export async function POST(req:NextRequest){try{
  if(req.headers.get('origin')!==new URL(req.url).origin)return fail('طلب غير مسموح',403);
- const b=await req.json() as Record<string,any>;
+ const b=await readJsonObject(req) as {action:string;id?:string;username:string;name:string;password:string;role:string;department:string;level:number;canEdit?:boolean;active?:boolean;current?:string;instructorId?:string;entryIds?:string[]};
  if(b.action==='login'){
+ if(!validText(b.username,120)||typeof b.password!=='string'||b.password.length<1||b.password.length>128)return fail('أدخل اسم المستخدم وكلمة المرور بصورة صحيحة');
  await bootstrap();const supplied=String(b.username||'').trim().toLowerCase().replace(/\s+/g,' ');const username=['نواف محمد علي همام','نواف محمد على همام'].includes(supplied)?'nawaf':supplied;const key=await digest(username);const now=Date.now();
  await db().prepare('INSERT INTO login_attempts(key,count,until) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN until<? THEN 1 ELSE count+1 END,until=CASE WHEN until<? THEN excluded.until ELSE until END').bind(key,now+900000,now,now).run();
  const attempts=await db().prepare('SELECT count FROM login_attempts WHERE key=?').bind(key).first<{count:number}>();
@@ -26,6 +28,7 @@ export async function POST(req:NextRequest){try{
  }
  if(a.role!=='admin')return fail('هذه العملية للمالك فقط',403);
  if(b.action==='status'){
+ if(!validText(b.id,200)||typeof b.active!=='boolean')return fail('حدد الحساب وحالة التفعيل بصورة صحيحة');
  const target=await db().prepare('SELECT id,role FROM accounts WHERE id=?').bind(String(b.id||'')).first<{id:string;role:string}>();
  if(!target)return fail('الحساب غير موجود',404);
  if(target.id==='owner'||target.id===a.id)return fail('لا يمكن تعطيل الحساب الرئيسي أو حسابك الحالي');
@@ -33,6 +36,7 @@ export async function POST(req:NextRequest){try{
  await db().batch([db().prepare('UPDATE accounts SET active=? WHERE id=?').bind(b.active?1:0,target.id),db().prepare('DELETE FROM sessions WHERE account_id=?').bind(target.id)]);return NextResponse.json({ok:true});
  }
  if(b.action==='save'){
+ if(!validText(b.username,40)||!validText(b.name,120)||(b.id!==undefined&&b.id!==''&&!validText(b.id,200))||(b.canEdit!==undefined&&typeof b.canEdit!=='boolean'))return fail('أكمل بيانات الحساب والصلاحيات بصورة صحيحة');
  if(b.id==='owner')return fail('لا يمكن تغيير صلاحيات الحساب الرئيسي');
  const previous=b.id?await db().prepare('SELECT * FROM accounts WHERE id=?').bind(String(b.id)).first<Account>():null;
  if(b.id&&!previous)return fail('الحساب غير موجود',404);
@@ -59,4 +63,4 @@ export async function POST(req:NextRequest){try{
  mutations.push(db().prepare('DELETE FROM sessions WHERE account_id=?').bind(id));
  await db().batch(mutations);return NextResponse.json({ok:true});
  }return fail('عملية غير معروفة');
- }catch(e){console.error(e);return fail('تعذر حفظ البيانات. أعد المحاولة.',503);}}
+ }catch(e){if(e instanceof InvalidRequestError)return NextResponse.json({error:e.message},{status:400});console.error(e);return fail('تعذر حفظ البيانات. أعد المحاولة.',503);}}

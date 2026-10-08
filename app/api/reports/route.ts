@@ -1,7 +1,7 @@
-import {NextRequest,NextResponse} from 'next/server';
+import {NextResponse} from 'next/server';
 import {account,db,scope} from '../../../lib/accounts';
 import {allEntries} from '../schedule/route';
-export async function GET(req:NextRequest){
+export async function GET(){
  try{
   const actor=await account();
   if(!actor)return NextResponse.json({error:'سجل الدخول لعرض تقرير مقرراتك'},{status:401});

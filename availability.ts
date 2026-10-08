@@ -1,4 +1,6 @@
 import type { Entry } from './data';
+import { validDate } from './lib/cancellation-selection';
+import { validTime } from './lib/validation';
 export type Cancellation = {entryId:string;date:string;reason:string;changedBy?:string;createdAt?:string;cancelledRoom?:string};
 export const weeklyCancellationKey=(date:string)=>`weekly:${date}`;
 export const weeklyCancellationFor=(cancellations:Cancellation[],entryId:string,date:string)=>
@@ -9,7 +11,7 @@ export const normalizeCiscoRoom=(room:string)=>/^(?:(?:ق|قاعة|قاعه|مع
 export function canonicalRoom(room:string):string|null {
   const compact=room.toLocaleLowerCase('ar').replace(/[أإآ]/g,'ا').replace(/ى/g,'ي').replace(/ة/g,'ه').replace(/[()]/g,'').replace(/\s+/g,'').replace(/^قاعه/,'ق');
   if(!compact||/^[-—–]+$/.test(compact)||compact==='معمل'||compact==='online'||compact.startsWith('غيرمذكور')||compact.startsWith('غيرمحدد'))return null;
-  let m=compact.match(/^ق(\d+)/);
+  let m=compact.match(/^(?:ق)?(\d+)$/);
   if(m)return `ق ${m[1]}`;
   if(normalizeCiscoRoom(room)==='ق Cisco')return 'ق Cisco';
   if(compact.startsWith('قالدراساتالعليا')){
@@ -41,8 +43,8 @@ export function canonicalRoom(room:string):string|null {
 export const roomKey=(room:string)=>canonicalRoom(room)??'';
 export const knownRoom=(room:string)=>canonicalRoom(room)!==null;
 export function roomsForDate(entries:Entry[],cancellations:Cancellation[],date:string,start:string,end:string){
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||start>=end)return [];
-  const weekday=new Date(`${date}T12:00:00`).getDay();
+  if(!validDate(date)||!validTime(start)||!validTime(end)||start>=end)return [];
+  const weekday=new Date(`${date}T12:00:00Z`).getUTCDay();
   const cancelled=new Set(cancellations.filter(x=>x.date===date||(x.date.startsWith('weekly:')&&x.date.slice(7)===date)).map(x=>x.entryId));
   const rooms=new Map<string,{name:string;occupants:Entry[]}>();
   for(const e of entries){

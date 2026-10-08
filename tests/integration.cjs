@@ -1,0 +1,80 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const os=require('node:os');
+const path=require('node:path');
+const net=require('node:net');
+const {spawn,spawnSync}=require('node:child_process');
+const {randomBytes,pbkdf2Sync}=require('node:crypto');
+const root=path.resolve(__dirname,'..');
+const temp=fs.mkdtempSync(path.join(os.tmpdir(),'saeed-qa-'));
+const cli=path.join(root,'node_modules/wrangler/bin/wrangler.js');
+const runtime=path.join(root,'scripts/runtime-env.mjs');
+const config=path.join(temp,'wrangler.json');
+const state=path.join(temp,'state');
+const originalPassword=randomBytes(20).toString('hex');
+const newPassword=randomBytes(20).toString('hex');
+const salt=randomBytes(16).toString('hex');
+const hash=salt+':'+pbkdf2Sync(originalPassword,salt,100000,32,'sha256').toString('hex');
+const results=[];
+const auditStart=new Date(Date.now()+3*3600000).toISOString().slice(0,10);
+let server,log,base;
+fs.writeFileSync(path.join(temp,'.dev.vars'),'OWNER_PASSWORD_HASH='+JSON.stringify(hash)+'\n',{mode:0o600});
+fs.writeFileSync(config,JSON.stringify({name:'saeed-qa',main:path.join(root,'dist/server/standalone.js'),compatibility_date:'2026-05-15',compatibility_flags:['nodejs_compat'],no_bundle:true,rules:[{type:'ESModule',globs:['**/*.js','**/*.mjs']}],assets:{directory:path.join(root,'dist/client'),binding:'ASSETS'},d1_databases:[{binding:'DB',database_name:'saeed-qa-db',database_id:'00000000-0000-4000-8000-000000000000',migrations_dir:path.join(root,'drizzle')}]}));
+function runCli(args){const result=spawnSync(process.execPath,['--import',runtime,cli,...args,'--config',config],{cwd:temp,encoding:'utf8',timeout:60000});assert.equal(result.status,0,result.stderr+'\n'+result.stdout.slice(-2000));return result.stdout}
+async function request(url,body,cookie='',extra={}){
+ const headers={...extra};if(cookie)headers.Cookie=cookie;
+ if(body!==undefined){headers.Origin=extra.Origin||base;headers['Content-Type']='application/json'}
+ const response=await fetch(base+url,{method:body===undefined?'GET':'POST',body:body===undefined?undefined:JSON.stringify(body),headers,redirect:'manual'});
+ const text=await response.text();let data;try{data=JSON.parse(text)}catch{data=text}
+ return {response,data,text};
+}
+async function post(url,body,cookie,status=200,extra={}){const result=await request(url,body,cookie,extra);assert.equal(result.response.status,status,JSON.stringify(result.data));return result}
+async function login(username,password){const r=await post('/api/account',{action:'login',username,password});const cookie=r.response.headers.get('set-cookie');assert.match(cookie,/HttpOnly/i);assert.match(cookie,/Secure/i);assert.match(cookie,/SameSite=Strict/i);return cookie.split(';')[0]}
+async function test(name,fn){await fn();results.push(name);console.log('PASS: '+name)}
+async function start(){
+ const port=await new Promise(resolve=>{const socket=net.createServer();socket.listen(0,'127.0.0.1',()=>{const port=socket.address().port;socket.close(()=>resolve(port))})});base='http://127.0.0.1:'+port;
+ log=fs.openSync(path.join(temp,'server.log'),'a');
+ server=spawn(process.execPath,['--import',runtime,cli,'dev','--config',config,'--local','--persist-to',state,'--ip','127.0.0.1','--port',String(port),'--inspector-port','0'],{cwd:temp,stdio:['ignore',log,log],detached:process.platform!=='win32'});
+ const until=Date.now()+30000;
+ while(Date.now()<until){if(server.exitCode!==null)throw Error('Server exited: '+fs.readFileSync(path.join(temp,'server.log'),'utf8').slice(-2000));try{const r=await request('/api/schedule');if(r.response.status===200)return}catch{}await new Promise(resolve=>setTimeout(resolve,100))}
+ throw Error('Server did not become ready');
+}
+async function stop(){if(!server)return;const child=server;server=null;const exited=new Promise(resolve=>child.once('exit',resolve));try{process.kill(process.platform==='win32'?child.pid:-child.pid,'SIGTERM')}catch{}await Promise.race([exited,new Promise(resolve=>setTimeout(resolve,3000))]);fs.closeSync(log)}
+const entry=(id,department='SE')=>({id,day:4,department,level:3,start:'08:00',end:'10:00',course:'مقرر اختبار شامل',instructor:'د. مدرس الاختبار',room:'QA-'+id,groupName:'',kind:'محاضرة',source:'qa'});
+(async()=>{
+ await test('seven migrations and repeat application',()=>{runCli(['d1','migrations','apply','DB','--local','--persist-to',state]);runCli(['d1','migrations','apply','DB','--local','--persist-to',state])});
+ await start();
+ await test('public schedule has 614 unique valid entries',async()=>{const r=await request('/api/schedule');assert.equal(r.data.entries.length,614);assert.equal(new Set(r.data.entries.map(e=>e.id)).size,614);assert.equal(r.data.role,'viewer');assert.equal(r.data.members.length,0);assert.match(r.response.headers.get('cache-control'),/no-store/);for(const e of r.data.entries){assert.match(e.start,/^(?:[01]\d|2[0-3]):[0-5]\d$/);assert.match(e.end,/^(?:[01]\d|2[0-3]):[0-5]\d$/);assert(e.start<e.end)}});
+ await test('anonymous admin redirect and private endpoints',async()=>{const r=await request('/admin');assert.equal(r.response.status,307);assert.equal(new URL(r.response.headers.get('location'),base).pathname,'/login');for(const endpoint of ['/api/reports','/api/history?start=2026-10-08','/api/notifications'])assert.equal((await request(endpoint)).response.status,401)});
+ await test('spoofed external identity has no privilege',async()=>{const extra={'oai-authenticated-user-id':'f19a42cd-fc65-4b12-bc55-03ec896699c9','oai-authenticated-user-email':'alhmyryswq@gmail.com'};assert.equal((await request('/api/schedule',undefined,'',extra)).data.role,'viewer');await post('/api/account',{action:'save'},'',401,extra);assert.equal((await request('/signin-with-chatgpt')).response.status,404)});
+ let owner=await login('nawaf',originalPassword);
+ await test('owner bootstrap, cookie and secret privacy',async()=>{const r=await request('/api/schedule',undefined,owner);assert.equal(r.data.isOwner,true);assert.equal(r.data.role,'admin');assert.equal(r.data.id,'owner');assert(!r.text.includes(hash));assert(!r.text.includes('password_hash'))});
+ await test('rendered pages and local assets load',async()=>{for(const page of ['/','/login','/admin']){const r=await request(page,undefined,owner);assert.equal(r.response.status,200);assert.match(r.response.headers.get('content-type'),/text\/html/);assert(r.text.includes('dir="rtl"'));assert(!r.text.includes('signin-with-chatgpt'));const assets=[...r.text.matchAll(/(?:src|href)="([^"<>]+)"/g)].map(m=>m[1].replaceAll('&amp;','&')).filter(url=>url.startsWith('/_next/')||url.endsWith('.jpg'));for(const asset of new Set(assets)){const a=await request(asset);assert.equal(a.response.status,200,asset);assert(a.text.length>0)}}});
+ await test('cross-origin authenticated mutation blocked',async()=>{await post('/api/account',{action:'status',id:'owner',active:false},owner,403,{Origin:'https://evil.example'})});
+ await test('manager, delegates and deputy can be created',async()=>{for(const [username,role,department] of [['qamanager','admin',''],['qadelegate','delegate','SE'],['qaitdelegate','delegate','IT'],['qadeputy','deputy','SE']])await post('/api/account',{action:'save',id:'',username,name:'حساب '+username,password:'qa-password',role,department,level:3,canEdit:false},owner)});
+ const manager=await login('qamanager','qa-password'),delegate=await login('qadelegate','qa-password'),itDelegate=await login('qaitdelegate','qa-password'),deputy=await login('qadeputy','qa-password');
+ await test('manager cannot create or modify administrators',async()=>{await post('/api/account',{action:'save',username:'forbiddenadmin',name:'test',password:'qa-password',role:'admin'},manager,403);const members=(await request('/api/schedule',undefined,owner)).data.members;await post('/api/account',{action:'status',id:members.find(m=>m.username==='qamanager').id,active:false},manager,400)});
+ await test('new instructor and weekly entries can be saved',async()=>{await post('/api/instructors',{id:'',name:'مدرس الاختبار',title:'د.'},manager);for(const e of [entry('integration-se'),entry('integration-it','IT'),{...entry('integration-unassigned'),instructor:'م. مدرس آخر'}])await post('/api/schedule',{action:'entry',entry:e},manager)});
+ const catalog=(await request('/api/schedule',undefined,manager)).data.instructors;
+ const instructorId=catalog.find(p=>p.name==='مدرس الاختبار').id;
+ await test('teacher account accepts explicit course assignments',async()=>{await post('/api/account',{action:'save',id:'',username:'qateacher',name:'د. مدرس الاختبار',password:'qa-password',role:'teacher',instructorId,entryIds:['integration-se','integration-it'],canEdit:false},manager)});
+ let teacher=await login('qateacher','qa-password');
+ await test('teacher scope and private account directory',async()=>{const r=await request('/api/schedule',undefined,teacher);assert.equal(r.data.role,'teacher');assert.equal(r.data.canEdit,false);assert.equal(r.data.members.length,0);assert.deepEqual(r.data.assignedEntryIds.sort(),['integration-it','integration-se']);await post('/api/schedule',{action:'cancel',id:'integration-unassigned',date:'2026-10-08'},teacher,403);await post('/api/schedule',{action:'location',id:'integration-se',date:'2026-10-08',room:'QA-other'},teacher,403);const admin=await request('/admin',undefined,teacher);assert.equal(admin.response.status,307)});
+ await test('teacher preview filters department and week',async()=>{const r=await post('/api/schedule',{action:'previewCancel',selection:{date:'2026-10-08',period:'week',department:'SE'}},teacher);assert.equal(r.data.rows.length,1);assert.equal(r.data.rows[0].entry.id,'integration-se');assert.equal(r.data.rows[0].date,'2026-10-08')});
+ await test('concurrent repeated cancellation sends one notice',async()=>{const calls=await Promise.all(Array.from({length:5},()=>post('/api/schedule',{action:'cancel',id:'integration-se',date:'2026-10-08',reason:'اختبار التزامن'},teacher)));assert(calls.every(r=>r.response.status===200));const inbox=(await request('/api/notifications',undefined,delegate)).data;assert.equal(inbox.unread,1);assert.equal(inbox.notifications[0].entry.department,'SE');assert.equal((await request('/api/notifications',undefined,itDelegate)).data.unread,0)});
+ await test('concurrent repeated cancellation creates one audit event',async()=>{const r=await request('/api/history?start='+auditStart+'&days=2',undefined,teacher);assert.equal(r.response.status,200);assert.equal(r.data.events.filter(e=>e.entry_id==='integration-se'&&e.action==='cancel').length,1)});
+ await test('teacher report and next-week isolation',async()=>{const r=await request('/api/reports',undefined,teacher);assert.equal(r.data.entries.length,2);assert.equal(r.data.cancellations.length,1);assert.equal(r.data.cancellations[0].date,'2026-10-08');assert(!r.data.cancellations.some(c=>c.date==='2026-10-15'))});
+ await test('notification ownership and deputy restrictions',async()=>{const inbox=(await request('/api/notifications',undefined,delegate)).data;await post('/api/notifications',{action:'read',id:inbox.notifications[0].id},itDelegate,404);assert.equal((await request('/api/notifications',undefined,deputy)).response.status,403);await post('/api/schedule',{action:'cancel',id:'integration-se',date:'2026-10-08'},deputy,403);await post('/api/notifications',{action:'readAll'},delegate);assert.equal((await request('/api/notifications',undefined,delegate)).data.unread,0)});
+ await test('restoration sends correct delegate a new notice',async()=>{await post('/api/schedule',{action:'restore',id:'integration-se',date:'2026-10-08'},teacher);const notices=(await request('/api/notifications',undefined,delegate)).data;assert.equal(notices.unread,1);assert.equal(notices.notifications.length,2);assert.equal(notices.notifications[0].action,'restore')});
+ await test('batch cancellation and restoration across sections',async()=>{const selection={date:'2026-10-08',period:'week'};assert.equal((await post('/api/schedule',{action:'cancelBatch',selection,reason:'اختبار الأسبوع'},teacher)).data.changed,2);assert.equal((await post('/api/schedule',{action:'cancelBatch',selection},teacher)).data.changed,0);assert.equal((await request('/api/notifications',undefined,itDelegate)).data.unread,1);assert.equal((await post('/api/schedule',{action:'restoreBatch',selection},teacher)).data.changed,2)});
+ await test('instructor rename updates assigned account and lectures',async()=>{await post('/api/instructors',{id:instructorId,name:'مدرس الاختبار المعدل',title:'أ. د.'},manager);const r=await request('/api/schedule',undefined,teacher);assert.equal(r.data.name,'أ. د. مدرس الاختبار المعدل');assert.equal(r.data.entries.find(e=>e.id==='integration-se').instructor,'أ. د. مدرس الاختبار المعدل')});
+ await test('disabled teacher loses existing session',async()=>{const member=(await request('/api/schedule',undefined,manager)).data.members.find(m=>m.username==='qateacher');await post('/api/account',{action:'status',id:member.id,active:false},manager);assert.equal((await request('/api/schedule',undefined,teacher)).data.role,'viewer');await post('/api/account',{action:'login',username:'qateacher',password:'qa-password'},'',401);await post('/api/account',{action:'status',id:member.id,active:true},manager);teacher=await login('qateacher','qa-password')});
+ await test('malformed requests return 400 without data loss',async()=>{await post('/api/schedule',null,owner,400);const response=await fetch(base+'/api/account',{method:'POST',headers:{Origin:base,'Content-Type':'application/json',Cookie:owner},body:'{bad JSON'});assert.equal(response.status,400);await post('/api/schedule',{action:'entry',entry:{...entry('bad-time'),start:'99:00',end:'99:30'}},owner,400);assert.equal((await request('/api/schedule',undefined,owner)).data.entries.length,617)});
+ await test('parallel schedule reads retain role isolation',async()=>{const users=[[owner,'admin'],[teacher,'teacher'],[delegate,'delegate'],[deputy,'deputy'],['','viewer']];const responses=await Promise.all(Array.from({length:25},async(_,i)=>{const [cookie,role]=users[i%users.length];const r=await request('/api/schedule',undefined,cookie);assert.equal(r.response.status,200);assert.equal(r.data.role,role);assert.equal(r.data.entries.length,617);if(role!=='admin')assert.equal(r.data.members.length,0);return r}));assert.equal(responses.length,25)});
+ await test('audit endpoint validates level filter',async()=>{assert.equal((await request('/api/history?start=2026-10-08&level=bad',undefined,owner)).response.status,400)});
+ await test('password change invalidates all owner sessions',async()=>{await post('/api/account',{action:'password',current:originalPassword,password:newPassword},owner);assert.equal((await request('/api/schedule',undefined,owner)).data.role,'viewer');await post('/api/account',{action:'login',username:'nawaf',password:originalPassword},'',401);owner=await login('nawaf',newPassword)});
+ await stop();await start();
+ await test('accounts and changes persist after server restart',async()=>{owner=await login('nawaf',newPassword);const r=await request('/api/schedule',undefined,owner);assert.equal(r.data.entries.length,617);assert(r.data.instructors.some(p=>p.name==='مدرس الاختبار المعدل'));assert(r.data.members.some(p=>p.username==='qateacher'));await post('/api/account',{action:'login',username:'nawaf',password:originalPassword},'',401);assert.equal((await request('/api/notifications',undefined,delegate)).data.notifications.length,4)});
+ await test('logout revokes server-side session',async()=>{await post('/api/account',{action:'logout'},owner);assert.equal((await request('/api/schedule',undefined,owner)).data.role,'viewer')});
+ console.log('RESULT: '+results.length+' live integration cases passed');
+})().catch(error=>{console.error('FAIL:',error.message);console.error('Passed before failure:',results.length);console.error(fs.readFileSync(path.join(temp,'server.log'),'utf8').slice(-1500));process.exitCode=1}).finally(async()=>{await stop();fs.rmSync(temp,{recursive:true,force:true})});

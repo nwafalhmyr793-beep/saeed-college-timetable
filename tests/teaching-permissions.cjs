@@ -1,22 +1,5 @@
-const assert=require('node:assert/strict');
-const fs=require('node:fs');const path=require('node:path');const {DatabaseSync}=require('node:sqlite');
-const ts=require('typescript');const Module=require('node:module');
-const database=new DatabaseSync(':memory:');database.exec('PRAGMA foreign_keys=ON');
-for(const file of fs.readdirSync('drizzle').filter(f=>f.endsWith('.sql')).sort())database.exec(fs.readFileSync('drizzle/'+file,'utf8'));
-let sessionToken='';
-const DB={prepare(sql){const params=[];return {bind(...p){params.push(...p);return this},async first(){return database.prepare(sql).get(...params)||null},async all(){return {results:database.prepare(sql).all(...params)}},async run(){database.prepare(sql).run(...params);return {success:true}}}},async batch(statements){database.exec('BEGIN');try{const result=[];for(const s of statements)result.push(await s.run());database.exec('COMMIT');return result}catch(e){database.exec('ROLLBACK');throw e}}};
-class NextResponse extends Response{static json(body,init){const r=new NextResponse(JSON.stringify(body),{...init,headers:{'Content-Type':'application/json',...init?.headers}});r.cookies={set(){}};return r}}
-const original=Module._load;
-Module._load=function(id,parent,isMain){if(id==='cloudflare:workers')return {env:{DB}};if(id==='next/headers')return {headers:async()=>new Headers({'oai-authenticated-user-id':'forged-user','oai-authenticated-user-email':'forged@example.test'}),cookies:async()=>({get:()=>sessionToken?{value:sessionToken}:undefined})};if(id==='next/server')return {NextResponse};return original.call(this,id,parent,isMain)};
-Module._extensions['.ts']=(m,filename)=>m._compile(ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,filename);
-const root=process.cwd();const schedule=require(root+'/app/api/schedule/route.ts'),accounts=require(root+'/app/api/account/route.ts'),instructors=require(root+'/app/api/instructors/route.ts'),reports=require(root+'/app/api/reports/route.ts'),history=require(root+'/app/api/history/route.ts');
-const notices=require(root+'/app/api/notifications/route.ts');
-const auth=require(root+'/lib/accounts.ts');
-const request=(body)=>({url:'https://test.local/api',headers:new Headers({origin:'https://test.local'}),json:async()=>body});
-const call=async(route,body,status=200)=>{const r=await route.POST(request(body));const d=await r.json();assert.equal(r.status,status,JSON.stringify(d));return d};
-async function signIn(id){sessionToken='session-'+id;database.prepare('INSERT OR REPLACE INTO sessions(token,account_id,expires) VALUES (?,?,?)').run(await auth.digest(sessionToken),id,Date.now()+10000000)}
-function seedAccount(id,role){database.prepare('INSERT INTO accounts(id,username,name,password_hash,role,department,level,can_edit,active) VALUES (?,?,?,?,?,?,?,?,1)').run(id,id,'اسم '+id,'hash',role,'SE',3,1)}
-const entry=(id,day,department='SE',instructor='د. المدرس الأول')=>({id,day,department,level:3,start:'08:00',end:'10:00',course:'مقرر اختبار',instructor,room:'403',groupName:'',kind:'محاضرة',source:'test'});
+const auditStart=new Date(Date.now()+3*3600000).toISOString().slice(0,10);
+const {assert,database,schedule,accounts,instructors,reports,history,notices,auth,call,signIn,seedAccount,entry}=require('./harness.cjs');
 (async()=>{
  assert.equal(await auth.account(),null,'Identity headers must not grant a session');
  seedAccount('owner','admin');seedAccount('manager','admin');seedAccount('delegate','delegate');seedAccount('deputy','deputy');seedAccount('delegateit','delegate');seedAccount('otherlevel','delegate');seedAccount('inactive','delegate');database.prepare("UPDATE accounts SET department='IT' WHERE id='delegateit'").run();database.prepare("UPDATE accounts SET level=2 WHERE id='otherlevel'").run();database.prepare("UPDATE accounts SET active=0 WHERE id='inactive'").run();
@@ -53,7 +36,7 @@ const entry=(id,day,department='SE',instructor='د. المدرس الأول')=>(
  assert.equal(database.prepare("SELECT COUNT(*) AS n FROM notifications WHERE account_id IN ('deputy','otherlevel','inactive')").get().n,0);
  const repeat=await call(schedule,{action:'cancelBatch',selection:week});assert.equal(repeat.changed,0);assert.equal(database.prepare('SELECT COUNT(*) AS n FROM notifications').get().n,3);
  const report=await (await reports.GET({nextUrl:new URL('https://test.local/api/reports')})).json();assert.equal(report.entries.length,3);
- const audit=await (await history.GET({nextUrl:new URL('https://test.local/api/history?start=2026-10-07&days=7')})).json();assert.equal(audit.events.length,3);
+ const audit=await (await history.GET({nextUrl:new URL('https://test.local/api/history?start='+auditStart+'&days=2')})).json();assert.equal(audit.events.length,3);
  await call(schedule,{action:'restoreBatch',selection:{...week,period:'day',department:'IT'}});assert.equal(database.prepare('SELECT COUNT(*) AS n FROM cancellations').get().n,2);
  await call(schedule,{action:'restoreBatch',selection:week});assert.equal(database.prepare('SELECT COUNT(*) AS n FROM cancellations').get().n,0);
  await signIn('delegate');

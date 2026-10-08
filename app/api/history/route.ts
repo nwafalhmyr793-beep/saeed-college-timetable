@@ -8,6 +8,7 @@ export async function GET(req:NextRequest){
  const dates=reportDates(start,count);if(!dates.length||!Number.isSafeInteger(offset)||offset<0)return NextResponse.json({error:'فترة غير صحيحة'},{status:400});
  const from=new Date(`${start}T00:00:00+03:00`),until=new Date(+from+count*86400000);
  const department=req.nextUrl.searchParams.get('department')||'',level=req.nextUrl.searchParams.get('level')||'';
+ if(level&&!/^[1-5]$/.test(level))return NextResponse.json({error:'مستوى غير صحيح'},{status:400});
  let where='occurred_at>=? AND occurred_at<?';const args:(string|number)[]=[from.toISOString(),until.toISOString()];
  if(actor.role==='teacher'){where+=' AND entry_id IN (SELECT entry_id FROM teaching_assignments WHERE account_id=?)';args.push(actor.id)}else if(actor.role!=='admin'){where+=' AND department=? AND level=?';args.push(actor.department,actor.level)}
  if(department){where+=' AND department=?';args.push(department)}if(level){where+=' AND level=?';args.push(Number(level))}

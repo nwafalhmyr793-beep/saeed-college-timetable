@@ -1,4 +1,5 @@
 'use client';
+import type {SchedulePayload} from '../lib/payload';
 import {useMemo,useState} from 'react';
 import {Dialog,DialogContent,DialogHeader,DialogTitle} from '@/components/ui/dialog';
 import {Button} from '@/components/ui/button';
@@ -6,7 +7,7 @@ import {days,type Entry} from '../data';
 import type {CancelSelection} from '../lib/cancellation-selection';
 type Row={entry:Entry;date:string;cancelled:boolean};
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Aden',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-export function TeachingPanel({data,refresh}:{data:any;refresh:()=>Promise<void>}){
+export function TeachingPanel({data,refresh}:{data:SchedulePayload;refresh:()=>Promise<void>}){
  const mine:Entry[]=useMemo(()=>data.entries.filter((e:Entry)=>(data.assignedEntryIds||[]).includes(e.id)),[data.entries,data.assignedEntryIds]);
  const [selection,setSelection]=useState<CancelSelection>({date:today(),period:'day',department:'',course:''}),[reason,setReason]=useState(''),[rows,setRows]=useState<Row[]|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
  const request=async(action:string)=>{setBusy(true);setError('');try{const r=await fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,selection,reason})});const body=await r.json() as {error?:string;rows?:Row[];changed?:number};if(!r.ok)throw Error(body.error||'تعذر تنفيذ العملية');if(action==='previewCancel')setRows(body.rows||[]);else{await refresh();setRows(null);setMessage(`${action==='cancelBatch'?'تم إلغاء':'تمت استعادة'} ${body.changed} محاضرة في الفترة المحددة.`)} }catch(e){setError((e as Error).message)}finally{setBusy(false)}};

@@ -64,8 +64,14 @@ node scripts/standalone.mjs deploy
 ## التحقق
 
 ```sh
-node node_modules/typescript/bin/tsc --noEmit --incremental false
-node tests/teaching-permissions.cjs
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+pnpm test:integration
+pnpm audit
 ```
 
-تختبر مجموعة الصلاحيات قاعدة SQLite مؤقتة دون الاتصال ببيانات الموقع الحية، بما يشمل نطاق المدرس، وصلاحيات المدير، وحدود الأسبوع، والإشعارات وخصوصيتها والاستعادة.
+تختبر مجموعة الصلاحيات والحالات الحدية قاعدة SQLite مؤقتة. اختبار التكامل ينشئ قاعدة D1 محلية وحسابات اختبار مؤقتة، ويشغل الخادم ويعيد تشغيله ثم يحذف بيانات الاختبار؛ لا يتصل بقاعدة الإنتاج ولا يقرأ كلمات مرورك. شغّل `build` قبل `test:integration`.
+
+تقرير الاختبار وحدوده في [tests/TEST_REPORT.md](tests/TEST_REPORT.md). فحص الحزم بتاريخ 2026-10-08 ما زال يسجل تنبيهًا مرتفعًا واحدًا في `braces` ضمن أدوات البناء، دون إصدار مصحح في سجل التنبيه. لذلك يُتوقع أن ينتهي `pnpm audit` برمز خروج غير صفري؛ لا يتم إخفاء التنبيه أو تعطيل الفحص.
